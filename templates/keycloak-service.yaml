@@ -1,0 +1,23 @@
+{{- if .Values.Keycloak.enabled }}
+{{- include "k8s-cloud.validateNetworkingType" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    highlight.service: keycloak
+  name: keycloak
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+    - name: "{{ .Values.KeycloakImage.appPort }}"
+      port: {{ .Values.KeycloakImage.appPort }}
+      targetPort: {{ .Values.KeycloakImage.appPort }}
+{{- if eq .Values.networking.type "nodeport" }}
+      nodePort: {{ .Values.networking.nodeport.keycloakPort }}
+{{- end }}
+  selector:
+    highlight.service: keycloak
+  # networking.type=ingress: ClusterIP only, reached via the shared Ingress /auth path (see
+  # templates/ingress.yaml). networking.type=nodeport: NodePort, exposed directly on its own port.
+  type: {{ if eq .Values.networking.type "nodeport" }}NodePort{{ else }}ClusterIP{{ end }}
+{{- end }}

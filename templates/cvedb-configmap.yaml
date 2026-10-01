@@ -1,0 +1,54 @@
+apiVersion: v1
+data:
+  cvedb.properties: |
+     # Passwords and the NIST API key are not stored in this file: ${CVEDB_*} placeholders are
+     # resolved by Spring from container env vars injected from the Secret (see existingSecret in
+     # values.yaml and templates/cvedb-deployment.yaml).
+
+     ##########################
+     # Instance configuration #
+     ##########################
+     
+     server.port=8082
+     
+     
+     ##########################
+     # Database configuration #
+     ##########################
+     
+     # You can specify the schema using the parameter currentSchema in the url (on postgresql above 9.4)
+     # create the schema before launching CVEDB
+     datasource.url=jdbc:postgresql://postgres.{{ .Release.Namespace }}.svc.cluster.local:5432/highlight?currentSchema=cvedb
+     datasource.driver=org.postgresql.Driver
+     datasource.username={{ .Values.Postgres.superuser.user }}
+     datasource.password=${CVEDB_DATASOURCE_PASSWORD}
+
+
+     ##########################
+     #   Mail configuration   #
+     ##########################
+
+     # In production, admisnitrastor's email is 'support@casthighlight.com'
+     # administrator.mail=support@casthighlight.com
+     administrator.mail={{ .Values.Cvedb.administratorMail }}
+
+     # In production, no reply's email is 'no-reply@casthighlight.com'
+     noreply.mail={{ .Values.Cvedb.noreplyMail }}
+
+     spring.mail.host={{ .Values.Cvedb.smtp.host }}
+     spring.mail.username={{ .Values.Cvedb.smtp.username }}
+     spring.mail.password=${CVEDB_SMTP_PASSWORD:}
+     spring.mail.properties.mail.transport.protocol=smtp
+     spring.mail.properties.mail.smtp.port={{ .Values.Cvedb.smtp.port }}
+     spring.mail.properties.mail.smtp.auth=true
+     spring.mail.properties.mail.smtp.starttls.enable=true
+     spring.mail.properties.mail.smtp.starttls.required=true
+
+     ##########################
+     #   API Key              #
+     ##########################
+     nist.apiKey=${CVEDB_NIST_API_KEY}
+kind: ConfigMap
+metadata:
+  name: cvedbconf
+  namespace: {{ .Release.Namespace }}

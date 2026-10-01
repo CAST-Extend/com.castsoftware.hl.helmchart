@@ -1,0 +1,66 @@
+apiVersion: v1
+data:
+  properties.hl-docker: |
+     # Passwords, secrets and license keys (HL_SMTP_PASSWORD, HL_PG_PASSWORD, HL_ADMIN_PWD,
+     # HL_SCA_SAM_SECRET, HL_LICENCE_*, HL_KEYCLOAK_*_SECRET) must NOT be listed in this file: they
+     # are container env vars injected from the Secret (see existingSecret in values.yaml and
+     # templates/highlightportal-deployment.yaml). run.sh re-exports every key found here, so a key
+     # present in this file - even empty - would override the env var coming from the Secret.
+
+     #Set ENV Vars - SMTP
+     HL_SMTP_HOST={{ .Values.HighlightPortal.smtp.host }}
+     HL_SMTP_PORT={{ .Values.HighlightPortal.smtp.port }}
+     HL_SMTP_USER={{ .Values.HighlightPortal.smtp.user }}
+     HL_EMAIL_SENDER={{ .Values.HighlightPortal.smtp.emailSender }}
+     HL_SMTP_TLS=true
+     HL_SMTP_AUTH=true
+
+     #Set ENV Vars - PostgreSQL
+     HL_PG_SERVER=postgres.{{ .Release.Namespace }}.svc.cluster.local
+     HL_PG_PORT=5432
+     HL_PG_DB=highlight
+     HL_PG_USER={{ .Values.Postgres.highlightRootUser.user }}
+     HL_PG_SCHEMA=highlight
+
+     #Set ENV Vars - Hostname (the single exposed gateway - the Ingress, see values.yaml networking/gateway)
+     HL_ROOT_URL={{ include "k8s-cloud.gatewayBaseURL" . }}/
+
+     # Security options
+     HL_SECURITY_ANTI_CLICK_JACKING=SAMEORIGIN
+     HL_SECURITY_HEADER=true
+
+     #Set ENV Vars - Admin
+     HL_ADMIN_MAIL={{ .Values.HighlightPortal.admin.mail }}
+
+     #Set ENV Vars - HL WAR Settings
+     SPRING_PROFILE=postgres-hikari,csrf
+     # CVEDB is never exposed externally (see templates/cvedb-service.yaml) - the portal talks to
+     # it over the in-cluster Service DNS name instead of going back out through the gateway.
+     HL_CVE_API_URL=http://cvedb.{{ .Release.Namespace }}.svc.cluster.local:8082
+     HL_CVE_LOCAL_URL=http://cvedb.{{ .Release.Namespace }}.svc.cluster.local:8082
+
+     {{- if .Values.Keycloak.enabled }}
+     #Set ENV Vars - Keycloak
+     # networking.type=ingress: Keycloak's /auth path is routed under the same gateway host as the
+     # portal (see templates/ingress.yaml and KC_HTTP_RELATIVE_PATH in
+     # templates/keycloak-configmap.yaml), so this is the one URL both the browser (login redirects)
+     # and the portal pod itself (admin API calls, health checks) need to reach. If the ingress
+     # controller's own Service is a cloud LoadBalancer, the portal's own calls to this public host
+     # can still hit the same "a pod can't reach its own cluster's LB public IP" hairpin limitation
+     # seen with the plain LoadBalancer Service this chart used to offer - if so, an internal
+     # ingress-controller Service/DNS override is the fix, not reverting this back to a raw internal
+     # Service hostname (which has no route to Keycloak from a browser at all).
+     # networking.type=nodeport: Keycloak has its own NodePort (see templates/keycloak-service.yaml),
+     # a different host:port than the portal's own.
+     HL_KEYCLOAK_ADMIN_URL={{ include "k8s-cloud.keycloakBaseURL" . }}/auth
+     HL_KEYCLOAK_REALM={{ .Values.Keycloak.realmName }}
+     HL_KEYCLOAK_ADMIN_CLIENT_ID=highlight-admin
+     HL_KEYCLOAK_DISABLE_SSL_VALIDATION=false
+     HL_KEYCLOAK_PORTAL_CLIENT_ID=highlight-portal
+     HL_LEGACY_TOKEN_SUNSET_DATE=
+     {{- end }}
+
+kind: ConfigMap
+metadata:
+  name: highlightportalconf
+  namespace: {{ .Release.Namespace }}

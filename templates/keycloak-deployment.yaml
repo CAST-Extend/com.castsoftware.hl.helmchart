@@ -1,0 +1,119 @@
+{{- if .Values.Keycloak.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    highlight.service: keycloak
+    version: {{ .Values.KeycloakImage.tag| default .Values.version }}
+  name: keycloak
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.KeycloakReplicaCount }}
+  selector:
+    matchLabels:
+      highlight.service: keycloak
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        highlight.network/highlight-network: "true"
+        highlight.service: keycloak
+    spec:
+      # The Keycloak image runs as a non-root user (uid 1000, gid 0) that never chowns its own
+      # volumes. Dynamically-provisioned PVs (AKS managed-csi, EBS, PD - anything but some
+      # HostPath-backed provisioners) mount as root:root 0755, which that user can't write into -
+      # kc.sh then fails with "Failed to save truststore ... Permission denied" and the container
+      # hangs forever polling a server that never started. fsGroup makes kubelet chown the mounted
+      # volume to this GID (and add it as a supplemental group on the container) before the
+      # container starts - it does NOT need to match any GID baked into the image, so this is
+      # kept configurable and defaults to a non-zero value (some security policies, e.g. restricted
+      # Pod Security Standards, forbid fsGroup/runAsGroup 0). On OpenShift (openshift.enabled) the
+      # SCC assigns both the UID and the fsGroup instead - see k8s-cloud.podSecurityContext in
+      # templates/_helpers.tpl.
+      {{- with include "k8s-cloud.podSecurityContext" (dict "root" . "fsGroup" .Values.Keycloak.fsGroup) | trim }}{{ . | nindent 6 }}{{- end }}
+      initContainers:
+{{- if .Values.RestrictedSecurityMode }}
+        # Read-only root filesystem: kc.sh re-augments the server into /opt/keycloak/lib/quarkus on
+        # start, and entrypoint.sh generates its realm-import/config files under /opt/keycloak -
+        # so the whole image's /opt/keycloak is copied into a writable emptyDir, mounted back over
+        # /opt/keycloak in the main container (with the keycloak-data PVC still nested on top).
+        - name: copy-keycloak-home
+          image: "{{ .Values.KeycloakImage.name }}:{{ .Values.KeycloakImage.tag }}"
+          imagePullPolicy: "{{ .Values.KeycloakImage.pullPolicy }}"
+          resources:
+            {{- toYaml .Values.InitContainerResources | nindent 12 }}
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" . "runAsUser" .Values.Keycloak.runAsUser "runAsGroup" .Values.Keycloak.runAsGroup) | trim }}{{ . | nindent 10 }}{{- end }}
+          command:
+            - /bin/sh
+            - -c
+            - rm -rf /keycloak-home/* && cp -r /opt/keycloak/. /keycloak-home/
+          volumeMounts:
+            - name: keycloak-home
+              mountPath: /keycloak-home
+{{- end }}
+        - name: wait-for-postgres
+          image: "{{ .Values.InitUtilImage.name }}:{{ .Values.InitUtilImage.tag }}"
+          imagePullPolicy: "{{ .Values.InitUtilImage.pullPolicy }}"
+          resources:
+            {{- toYaml .Values.InitContainerResources | nindent 12 }}
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" .) | trim }}{{ . | nindent 10 }}{{- end }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until pg_isready -h postgres.{{ .Release.Namespace }}.svc.cluster.local -p 5432; do
+                echo "Waiting for postgres to be ready..."
+                sleep 2
+              done
+      containers:
+        - image: "{{ .Values.KeycloakImage.name }}:{{ .Values.KeycloakImage.tag}}"
+          name: keycloak
+          imagePullPolicy: "{{ .Values.KeycloakImage.pullPolicy }}"
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" . "runAsUser" .Values.Keycloak.runAsUser "runAsGroup" .Values.Keycloak.runAsGroup) | trim }}{{ . | nindent 10 }}{{- end }}
+          envFrom:
+            - configMapRef:
+                name: keycloakconf
+          # Passwords/secrets, from the chart-managed Secret or existingSecret (see values.yaml).
+          # Client secrets are generated values, recommended rotation every 90 days via the Keycloak
+          # admin console.
+          env:
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "KC_BOOTSTRAP_ADMIN_PASSWORD" "key" "keycloak-bootstrap-admin-password") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "KC_PERMANENT_ADMIN_PASSWORD" "key" "keycloak-permanent-admin-password") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "KC_HL_CLIENT_SECRET" "key" "keycloak-portal-client-secret") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "KC_HL_ADMIN_SECRET" "key" "keycloak-admin-client-secret") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "KC_SPI_EVENTS_LISTENER_HL_EVENT_WEBHOOK_SECRET" "key" "keycloak-webhook-secret") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "SMTP_PASSWORD" "key" "keycloak-smtp-password" "optional" true) | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "KC_DB_PASSWORD" "key" "keycloak-db-password") | nindent 12 }}
+          ports:
+            - containerPort: {{ .Values.KeycloakImage.appPort }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.KeycloakResources | nindent 12 }}
+          volumeMounts:
+{{- if .Values.RestrictedSecurityMode }}
+            # Writable copy of the image's /opt/keycloak (see copy-keycloak-home above) + /tmp.
+            - name: keycloak-home
+              mountPath: /opt/keycloak
+            - name: tmp
+              mountPath: /tmp
+{{- end }}
+            # /opt/keycloak/data/init/.initialized is entrypoint.sh's own "already bootstrapped"
+            # sentinel - without this mounted on a PVC it lives only in the container's writable
+            # layer and is lost on every pod recreation, causing entrypoint.sh to redo first-run
+            # init (and post-init.sh to fail forever, since it deletes the bootstrap-admin user at
+            # the end of its first successful run).
+            - name: keycloak-data
+              mountPath: /opt/keycloak/data
+      volumes:
+        - name: keycloak-data
+          persistentVolumeClaim:
+            claimName: keycloak-data
+{{- if .Values.RestrictedSecurityMode }}
+        - name: keycloak-home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+      restartPolicy: Always
+{{- end }}

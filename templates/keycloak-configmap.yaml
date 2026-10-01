@@ -1,0 +1,87 @@
+{{- if .Values.Keycloak.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloakconf
+  namespace: {{ .Release.Namespace }}
+data:
+  # Passwords and secrets (KC_BOOTSTRAP_ADMIN_PASSWORD, KC_PERMANENT_ADMIN_PASSWORD, KC_HL_CLIENT_SECRET,
+  # KC_HL_ADMIN_SECRET, KC_SPI_EVENTS_LISTENER_HL_EVENT_WEBHOOK_SECRET, SMTP_PASSWORD, KC_DB_PASSWORD)
+  # are not stored here - they're injected from the Secret (see existingSecret in values.yaml) by
+  # templates/keycloak-deployment.yaml.
+
+  # Bootstrap admin - used only for the very first init, auto-deleted afterward
+  # Keycloak 26+ convention: KC_BOOTSTRAP_ADMIN_USERNAME/_PASSWORD (not KC_ADMIN_USER/KC_ADMIN_PASSWORD).
+  KC_BOOTSTRAP_ADMIN_USERNAME: "{{ .Values.Keycloak.bootstrapAdmin.user }}"
+
+  # Permanent admin - the one to use for console access afterward
+  KC_PERMANENT_ADMIN_USER: "{{ .Values.Keycloak.permanentAdmin.user }}"
+  KC_PERMANENT_ADMIN_EMAIL: "{{ .Values.Keycloak.permanentAdmin.email }}"
+
+  # Hostname / routing - reachable from the user's browser through the gateway's /auth path
+  # (see templates/ingress.yaml, which routes it under the same host as the portal).
+  KC_HOSTNAME: "{{ .Values.gateway.host }}"
+  KC_HTTP_RELATIVE_PATH: "/auth"
+  KC_APP_PORT: "{{ .Values.KeycloakImage.appPort }}"
+  # Used by post-init.sh for its own local admin-API calls (curl with a Host header override) -
+  # without this, its health-check curl gets called with no scheme/host and loops on HTTP 000 forever.
+  KC_INTERNAL_URL: "http://localhost:{{ .Values.KeycloakImage.appPort }}"
+
+  # TLS - plain HTTP inside the cluster in both networking modes.
+  # networking.type=ingress: the Ingress terminates TLS (networking.ingress.tls) and forwards HTTP
+  # to this pod. KC_PROXY_HEADERS makes Keycloak trust the ingress's X-Forwarded-Proto header so it
+  # reports "https" in its own issuer/redirect URLs when gateway.protocol=https - without it,
+  # Keycloak would embed "http://" in tokens/URLs even though the actual gateway.host is https,
+  # which fails the portal's OIDC issuer validation (spring.security...issuer-uri, built from
+  # gateway.protocol).
+  # networking.type=nodeport: no proxy in front of Keycloak, so KC_PROXY_HEADERS is left unset -
+  # trusting X-Forwarded-* headers with nothing there to set them would let a client spoof them.
+  KC_HTTP_ENABLED: "true"
+{{- if ne .Values.networking.type "nodeport" }}
+  # networking.type=route: same as ingress - the OpenShift router terminates TLS and sets
+  # X-Forwarded-Proto/Host.
+  KC_PROXY_HEADERS: "xforwarded"
+{{- end }}
+
+  # Realm
+  REALM_NAME: "{{ .Values.Keycloak.realmName }}"
+  # NOTE: no trailing slash. The realm template concatenates this as
+  # ${APP_BASE_URL}/login/oauth2/code/hl-keycloak/* (its own leading slash) - a trailing slash here
+  # produces a double slash in the registered redirect URI, which then fails to match the single-
+  # slash redirect_uri the portal actually sends (built from HL_ROOT_URL, which DOES end in /),
+  # causing Keycloak to reject the login with "Invalid parameter: redirect_uri".
+  APP_BASE_URL: "{{ include "k8s-cloud.gatewayBaseURL" . }}"
+
+  # Webhook / event listener SPI (Keycloak -> Highlight callback), stays on the internal Service DNS.
+  # Since hlkeycloak:1.0.6 these are native Keycloak SPI options read by the hl-event-webhook
+  # listener itself - the old KC_HL_WEBHOOK_URL/_SECRET names are ignored. Plain HTTP is fine: the
+  # SPI's HttpClient doesn't require https, so no KC_WEBHOOK_HOST_ALIAS/hostAliases trick (only
+  # needed upstream to reach a host-run portal through its TLS cert's real DNS name).
+  KC_SPI_EVENTS_LISTENER_HL_EVENT_WEBHOOK_URL: "http://highlightportal.{{ .Release.Namespace }}.svc.cluster.local:8080{{ .Values.Keycloak.webhookPath }}"
+
+  # SMTP - mirrors mail.smtp.* from highlightportalconf
+  # Real Keycloak has no native KC_SMTP_* env var - SMTP is per-realm config, and the hlkeycloak
+  # realm-import template (hl-portal-realm.json) reads plain SMTP_* (no KC_ prefix) via envsubst.
+  SMTP_HOST: "{{ .Values.Keycloak.smtp.host }}"
+  SMTP_PORT: "{{ .Values.Keycloak.smtp.port }}"
+  SMTP_FROM: "{{ .Values.Keycloak.smtp.from }}"
+  SMTP_FROM_DISPLAY_NAME: "{{ .Values.Keycloak.smtp.fromDisplayName }}"
+  SMTP_USER: "{{ .Values.Keycloak.smtp.user }}"
+
+  # Database - dedicated database/schema, separate from the Highlight one (see postgres init-db.sh)
+  # entrypoint.sh runs the stock `kc.sh start` with no env var translation, so these must be
+  # Keycloak's own native Quarkus-distribution var names.
+  KC_DB: "postgres"
+  KC_DB_URL_HOST: "postgres.{{ .Release.Namespace }}.svc.cluster.local"
+  KC_DB_URL_PORT: "5432"
+  KC_DB_URL_DATABASE: "{{ .Values.Keycloak.database.name }}"
+  KC_DB_SCHEMA: "{{ .Values.Keycloak.database.schema }}"
+  KC_DB_USERNAME: "{{ .Values.Keycloak.database.user }}"
+{{- if eq (int .Values.KeycloakReplicaCount) 1 }}
+
+  # Single replica - disable Infinispan/JGroups clustering (JDBC_PING) so Keycloak doesn't try to
+  # discover cluster peers over the DB, which only adds noisy JOIN-timeout errors to the logs.
+  # Left at Keycloak's default (clustered) when KeycloakReplicaCount > 1, where it's required.
+  KC_CACHE: "local"
+{{- end }}
+{{- end }}

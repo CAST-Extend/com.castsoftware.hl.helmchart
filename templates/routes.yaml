@@ -1,0 +1,55 @@
+{{- if eq .Values.networking.type "route" }}
+{{- /*
+OpenShift equivalent of templates/ingress.yaml: two Routes sharing the same gateway.host, path-
+routed by the OpenShift router (HAProxy) - "/auth" to Keycloak, everything else to the Portal - so,
+exactly like the Ingress, there is a single external entry point for both browser-based Keycloak
+login and the portal's own server-side Keycloak calls.
+
+TLS is edge-terminated at the router, which forwards plain HTTP to the pods and sets
+X-Forwarded-Proto (trusted by Keycloak via KC_PROXY_HEADERS, see templates/keycloak-configmap.yaml).
+*/ -}}
+{{- if .Values.Keycloak.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: highlight-keycloak
+  namespace: {{ .Release.Namespace }}
+{{- with .Values.networking.route.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  host: {{ .Values.gateway.host }}
+  # Matches KC_HTTP_RELATIVE_PATH=/auth in templates/keycloak-configmap.yaml - no rewrite needed.
+  path: /auth
+  to:
+    kind: Service
+    name: keycloak
+    weight: 100
+  port:
+    targetPort: "{{ .Values.KeycloakImage.appPort }}"
+  {{- include "k8s-cloud.routeTLS" . | trim | nindent 2 }}
+  wildcardPolicy: None
+---
+{{- end }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: highlight-portal
+  namespace: {{ .Release.Namespace }}
+{{- with .Values.networking.route.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  host: {{ .Values.gateway.host }}
+  path: /
+  to:
+    kind: Service
+    name: highlightportal
+    weight: 100
+  port:
+    targetPort: "8080"
+  {{- include "k8s-cloud.routeTLS" . | trim | nindent 2 }}
+  wildcardPolicy: None
+{{- end }}

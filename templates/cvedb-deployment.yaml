@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    highlight.service: cvedb
+    version: {{ .Values.CvedbImage.tag| default .Values.version }}
+  name: cvedb
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.CvedbReplicaCount }}
+  selector:
+    matchLabels:
+      highlight.service: cvedb
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        highlight.network/highlight-network: "true"
+        highlight.service: cvedb
+    spec:
+      {{- with include "k8s-cloud.podSecurityContext" (dict "root" .) | trim }}{{ . | nindent 6 }}{{- end }}
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.InitUtilImage.name }}:{{ .Values.InitUtilImage.tag }}"
+          imagePullPolicy: "{{ .Values.InitUtilImage.pullPolicy }}"
+          resources:
+            {{- toYaml .Values.InitContainerResources | nindent 12 }}
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" .) | trim }}{{ . | nindent 10 }}{{- end }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until pg_isready -h postgres.{{ .Release.Namespace }}.svc.cluster.local -p 5432; do
+                echo "Waiting for postgres to be ready..."
+                sleep 2
+              done
+      containers:
+        - image: "{{ .Values.CvedbImage.name }}:{{ .Values.CvedbImage.tag}}"
+          name: cvedb
+          imagePullPolicy: "{{ .Values.CvedbImage.pullPolicy }}"
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" . "runAsUser" .Values.Cvedb.runAsUser) | trim }}{{ . | nindent 10 }}{{- end }}
+          # Resolved by the ${CVEDB_*} placeholders in cvedb.properties (templates/cvedb-configmap.yaml).
+          env:
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "CVEDB_DATASOURCE_PASSWORD" "key" "postgres-superuser-password") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "CVEDB_SMTP_PASSWORD" "key" "cvedb-smtp-password" "optional" true) | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "CVEDB_NIST_API_KEY" "key" "cvedb-nist-api-key") | nindent 12 }}
+          ports:
+            - containerPort: 8082
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.CvedbResources | nindent 12 }}
+          volumeMounts:
+            - name: cvedbconf
+              mountPath: /home/highlight/cvedb/config/cvedb.properties
+              subPath: cvedb.properties
+{{- if include "k8s-cloud.restricted" . }}
+            # The paths cvedb.jar writes to: java.io.tmpdir, its logback file appender
+            # (${cve.dir:-./target}/logs, relative to WORKDIR /home/highlight - failing to open it
+            # aborts startup) and dependency-check's data.directory ([JAR]/data). Needed both with a
+            # read-only root filesystem (RestrictedSecurityMode) and on OpenShift, whose random UID
+            # can't write the image's uid-5000-owned /home/highlight.
+            - mountPath: /tmp
+              name: tmp
+            - mountPath: /home/highlight/target
+              name: logs
+            - mountPath: /home/highlight/cvedb/bin/data
+              name: data
+{{- end }}
+      restartPolicy: Always
+      volumes:
+        - name: cvedbconf
+          configMap:
+            name: cvedbconf
+{{- if include "k8s-cloud.restricted" . }}
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+{{- end }}

@@ -1,0 +1,23 @@
+{{- include "k8s-cloud.validateNetworkingType" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    highlight.service: highlightportal
+  name: highlightportal
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+    - name: "8080"
+      port: 8080
+      targetPort: 8080
+{{- if eq .Values.networking.type "nodeport" }}
+      nodePort: {{ .Values.networking.nodeport.portalPort }}
+{{- end }}
+  selector:
+    highlight.service: highlightportal
+  # networking.type=ingress: ClusterIP only - the single gateway exposed outside the cluster is the
+  # Ingress (see templates/ingress.yaml and networking.type in values.yaml), never this Service
+  # directly. Postgres and cvedb stay ClusterIP-only in both modes.
+  # networking.type=nodeport: NodePort - this Service is exposed directly, no Ingress involved.
+  type: {{ if eq .Values.networking.type "nodeport" }}NodePort{{ else }}ClusterIP{{ end }}

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    highlight.service: postgres
+  name: postgres-headless
+  namespace: {{ .Release.Namespace }}
+spec:
+  # Governing service for the postgres StatefulSet (spec.serviceName) - gives pod-0 a stable DNS
+  # identity (postgres-0.postgres-headless.<namespace>.svc.cluster.local).
+  clusterIP: None
+  ports:
+    - name: "5432"
+      port: 5432
+      targetPort: 5432
+  selector:
+    highlight.service: postgres

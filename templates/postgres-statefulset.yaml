@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    highlight.service: postgres
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: postgres-headless
+  replicas: {{ .Values.PostgresReplicaCount }}
+  selector:
+    matchLabels:
+      highlight.service: postgres
+  # StatefulSets replace pods one at a time, in order, and always delete an ordinal's pod before
+  # recreating it - so there's no risk of two pods fighting over the same ReadWriteOnce volume.
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        highlight.network/highlight-network: "true"
+        highlight.service: postgres
+    spec:
+      # The postgres image starts as root and drops to its "postgres" user (999) itself - fine by
+      # default, but RestrictedSecurityMode runs it directly as that user (see
+      # Postgres.runAsUser/fsGroup in values.yaml), with the fsGroup making db-data writable to it.
+      {{- with include "k8s-cloud.podSecurityContext" (dict "root" . "fsGroup" (and .Values.RestrictedSecurityMode .Values.Postgres.fsGroup)) | trim }}{{ . | nindent 6 }}{{- end }}
+      containers:
+        - env:
+            - name: POSTGRES_INITDB_ARGS
+              value: -E 'UTF-8' --lc-collate=C --lc-ctype=C
+            # Passwords from the chart-managed Secret or existingSecret (see values.yaml). The
+            # HL_DB_* ones are read by init-db.sh (templates/postgres-configmap.yaml) via psql \getenv.
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "POSTGRES_PASSWORD" "key" "postgres-superuser-password") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_DB_HIGHLIGHT_PASSWORD" "key" "postgres-highlight-user-password") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_DB_HIGHLIGHT_ROOT_PASSWORD" "key" "postgres-highlight-root-password") | nindent 12 }}
+            {{- if .Values.Keycloak.enabled }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_DB_KEYCLOAK_PASSWORD" "key" "keycloak-db-password") | nindent 12 }}
+            {{- end }}
+            - name: POSTGRES_USER
+              value: "{{ .Values.Postgres.superuser.user }}"
+            # Data lives in a "postgres" subdirectory of the volume that the image's entrypoint
+            # creates itself, rather than a kubelet-created subPath mount: on OpenShift the
+            # container runs as a random non-root UID, which can't chmod 0700 a root-owned
+            # subPath dir as initdb requires. Same on-disk layout as the former subPath mount.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/postgres
+          image: "{{ .Values.PostgresImage.name }}:{{ .Values.PostgresImage.tag}}"
+          imagePullPolicy: "{{ .Values.PostgresImage.pullPolicy }}"
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" . "runAsUser" .Values.Postgres.runAsUser) | trim }}{{ . | nindent 10 }}{{- end }}
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready -U {{ .Values.Postgres.superuser.user }}
+            failureThreshold: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          name: postgres
+          ports:
+            - containerPort: 5432
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.PostgresResources | nindent 12 }}
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: db-data
+            - name: pgconf
+              mountPath: "/usr/share/postgresql/postgresql.conf.sample"
+              subPath: postgresql.conf.sample
+            - name: pginit
+              mountPath: "/docker-entrypoint-initdb.d/init-db.sh"
+              subPath: init-db.sh
+            - name: dshm
+              mountPath: /dev/shm
+{{- if .Values.RestrictedSecurityMode }}
+            # Read-only root filesystem: unix socket/lock dir and temp files (data is on db-data).
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+{{- end }}
+      restartPolicy: Always
+      volumes:
+        # Mounts the pre-existing, manually-managed PVC (templates/postgres-pvc.yaml) rather than
+        # using volumeClaimTemplates - fine for a single-replica database that isn't meant to scale out.
+        - name: db-data
+          persistentVolumeClaim:
+            claimName: db-data-highlight
+        - name: pgconf
+          configMap:
+            name: postgresqlconf
+        - name: pginit
+          configMap:
+            name: init-db
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+{{- if .Values.RestrictedSecurityMode }}
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

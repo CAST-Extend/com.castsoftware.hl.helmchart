@@ -1,0 +1,10 @@
+exclude_*
+config/
+scripts/
+*/left/
+*/backup*
+backup/
+*/ex_*
+ex_*
+kub-*
+.git

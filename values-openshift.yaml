@@ -1,0 +1,25 @@
+# OpenShift overlay for the k8s-cloud chart - layer it on top of values.yaml and values-secret.yaml:
+#   helm upgrade --install highlight . -n highlight --create-namespace \
+#     -f values.yaml -f values-secret.yaml -f values-openshift.yaml \
+#     --set gateway.host=highlight.apps.<cluster-domain>
+#
+# With a custom hostname (not under the cluster's apps domain), also pass its certificate:
+#     --set-file networking.route.tls.certificate=fullchain.pem --set-file networking.route.tls.key=privkey.pem
+#
+# Requires images that run under an arbitrary UID with supplemental group 0 (restricted-v2 SCC) -
+# i.e. their writable paths are group-0 owned with g=u permissions (see hl-docker Dockerfiles).
+
+openshift:
+  enabled: true
+
+networking:
+  type: route
+
+gateway:
+  protocol: https
+  port: ""
+
+storageClass:
+  # Empty = cluster default StorageClass (e.g. "crc-csi-hostpath-provisioner" on OpenShift Local/CRC,
+  # "gp3-csi" on ROSA, "managed-csi" on ARO).
+  name: ""

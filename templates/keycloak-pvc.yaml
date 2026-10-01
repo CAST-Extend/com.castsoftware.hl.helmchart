@@ -1,0 +1,20 @@
+{{- if .Values.Keycloak.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keycloak-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    highlight.service: keycloak-data
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+{{- if .Values.storageClass.name }}
+  storageClassName: {{ .Values.storageClass.name }}
+{{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storageClass.keycloakSize }}
+{{- end }}

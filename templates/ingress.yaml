@@ -1,0 +1,42 @@
+{{- if eq .Values.networking.type "ingress" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: highlight-gateway
+  namespace: {{ .Release.Namespace }}
+{{- if .Values.networking.ingress.annotations }}
+  annotations:
+    {{- toYaml .Values.networking.ingress.annotations | nindent 4 }}
+{{- end }}
+spec:
+  ingressClassName: {{ .Values.networking.ingress.className }}
+{{- if .Values.networking.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.gateway.host }}
+      secretName: {{ .Values.networking.ingress.tls.secretName }}
+{{- end }}
+  rules:
+    - host: {{ .Values.gateway.host }}
+      http:
+        paths:
+{{- if .Values.Keycloak.enabled }}
+          # Keycloak's browser-facing login/realm endpoints, published under the same host/gateway
+          # so only one external entry point exists - matches KC_HTTP_RELATIVE_PATH=/auth in
+          # templates/keycloak-configmap.yaml.
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: {{ .Values.KeycloakImage.appPort }}
+{{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: highlightportal
+                port:
+                  number: 8080
+{{- end }}

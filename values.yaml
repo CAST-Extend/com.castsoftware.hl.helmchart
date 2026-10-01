@@ -1,0 +1,292 @@
+# Default (non-sensitive) values for the k8s-cloud chart - CAST Highlight on managed Kubernetes
+# (AKS/EKS/GKE). Sensitive values (passwords, secrets, license keys) live in values-secret.yaml -
+# install with both files, e.g.:
+#   helm install highlight . -f values.yaml -f values-secret.yaml --namespace highlight --create-namespace
+#
+# Unlike k8s-onprem, no Service in this chart ever uses NodePort. The only thing exposed outside
+# the cluster is the single gateway configured below.
+
+version: 6.0.1
+
+PostgresReplicaCount: 1
+HighlightPortalReplicaCount: 1
+CvedbReplicaCount: 1
+KeycloakReplicaCount: 1
+
+#
+# The externally-reachable hostname/IP. In networking.type=ingress this, together with
+# gateway.protocol/port, is the single entry point every browser-facing URL baked into the app
+# config (HL_ROOT_URL, the Keycloak issuer/APP_BASE_URL, HL_KEYCLOAK_ADMIN_URL) is derived from -
+# point it at the DNS record that resolves to the Ingress controller's address.
+#
+# In networking.type=nodeport there is no single gateway (Portal and Keycloak each get their own
+# NodePort - see networking.nodeport below): gateway.host is reused as the reachable node
+# hostname/IP, but gateway.protocol/port are ignored - it's always plain HTTP on each service's
+# own NodePort.
+#
+gateway:
+  host: highlight.example.com
+  protocol: https   # http or https - ignored when networking.type=nodeport (always http there)
+  port: ""          # leave empty for the protocol's standard port (80/443); set only for a non-standard port; ignored when networking.type=nodeport
+
+#
+# How the app is exposed to the outside of the cluster. Two supported values:
+#
+# - ingress (default): a single Ingress resource (requires an NGINX ingress controller already
+#   installed in the cluster) that path-routes "/" to the Portal and "/auth" to Keycloak under the
+#   same host, so browser-based Keycloak login and the portal's own server-side Keycloak calls both
+#   go through one consistent, reachable HTTPS hostname (networking.ingress below).
+#
+#   A plain Kubernetes LoadBalancer Service was deliberately not used: it can only ever front ONE
+#   backend Service, so it can't also route Keycloak's /auth path - browser-based Keycloak login
+#   could never work through it, and cloud LoadBalancers generally don't support a pod hairpinning
+#   back through their own public IP either.
+#
+# - nodeport: no Ingress/LoadBalancer at all - the Portal and Keycloak Services are each exposed
+#   directly as a plain-HTTP NodePort on every cluster node (networking.nodeport below), reachable
+#   at http://<node>:<port>. No ingress controller or TLS certificate needed - suited to bare-metal/
+#   on-prem or quick test clusters. CVEDB and Postgres stay ClusterIP-only (internal) in all modes.
+#
+# - route (OpenShift only): same single-host layout as ingress, but implemented as two OpenShift
+#   Routes ("/auth" -> Keycloak, "/" -> Portal) served by the built-in OpenShift router - no NGINX
+#   ingress controller needed (networking.route below). Usually combined with openshift.enabled=true,
+#   see values-openshift.yaml.
+#
+# `networking.type` is kept as a discriminated value (with its settings under the matching
+# `networking.<type>` block below) so a future gateway implementation - e.g. an Istio
+# Gateway/VirtualService - can be added later as a new sibling value + block without reshaping
+# this structure (see the guard in templates/_helpers.tpl).
+#
+networking:
+  type: ingress   # ingress (default, https), nodeport (http, no ingress controller needed) or route (OpenShift)
+  ingress:
+    className: nginx
+    annotations: {}
+    # e.g. cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls:
+      enabled: true
+      # Pre-existing TLS secret (tls.crt + tls.key) already provisioned in this namespace - this
+      # chart references it but does not create or manage the certificate itself.
+      secretName: tls-secret-cast
+  # Only used when networking.type=nodeport. Must be within the cluster's NodePort range
+  # (default 30000-32767).
+  nodeport:
+    portalPort: 30080
+    keycloakPort: 30081
+  # Only used when networking.type=route (OpenShift).
+  route:
+    annotations: {}
+    # e.g. haproxy.router.openshift.io/timeout: 300s
+    tls:
+      enabled: true   # edge termination at the OpenShift router, plain HTTP to the pods
+      # Leave certificate/key empty to use the router's default certificate - only valid when
+      # gateway.host is under the cluster's apps domain (e.g. highlight.apps.mycluster.com).
+      # For a custom hostname, pass PEM files at install time (Routes can't reference a Secret):
+      #   --set-file networking.route.tls.certificate=fullchain.pem --set-file networking.route.tls.key=privkey.pem
+      certificate: ""
+      key: ""
+      caCertificate: ""
+
+#
+# OpenShift (restricted-v2 SCC) compatibility. When enabled, pods get no fixed UID/GID/fsGroup
+# (OpenShift assigns them from the namespace's range - HighlightPortal.fsGroup/Keycloak.fsGroup are
+# ignored) and every container gets the restricted Pod Security Standard's securityContext
+# (runAsNonRoot, seccompProfile RuntimeDefault, allowPrivilegeEscalation false, drop ALL
+# capabilities). See values-openshift.yaml.
+openshift:
+  enabled: false
+
+#
+# Restricted security mode, for clusters enforcing the "restricted" Pod Security Standard (e.g. a
+# namespace labelled pod-security.kubernetes.io/enforce=restricted) or similar policies (Kyverno,
+# Gatekeeper). When enabled, every pod/container gets:
+#   - runAsNonRoot, seccompProfile RuntimeDefault, allowPrivilegeEscalation false, drop ALL
+#     capabilities (as with openshift.enabled)
+#   - readOnlyRootFilesystem - every path the app writes to becomes a PVC or an emptyDir (Keycloak
+#     runs from a writable copy of /opt/keycloak, see templates/keycloak-deployment.yaml)
+#   - on plain Kubernetes: fixed non-root UIDs (the *.runAsUser values below - postgres then runs
+#     directly as its "postgres" user instead of starting as root) and fsGroups for their volumes.
+# Can be combined with openshift.enabled (the SCC then still picks UIDs/fsGroups).
+RestrictedSecurityMode: false
+
+#
+# Secrets (passwords, client secrets, NIST API key, license keys) - 2 options:
+# 1) You can provide the name of an existing Kubernetes Secret in the release namespace, e.g. one
+#    synced from an external secret store (External Secrets Operator, Secrets Store CSI driver with
+#    secret sync, Sealed Secrets, Vault...):
+existingSecret: ""
+#    If provided, the chart does not create any Secret and every password/secret/license value of
+#    values-secret.yaml is ignored (user names, hosts, etc. still come from the values files).
+#    WARNING: the external secret MUST contain the exact following keys (plain values, no escaping):
+#    - postgres-superuser-password          (postgres superuser - also cvedb's datasource password)
+#    - postgres-highlight-user-password     (Postgres "highlight" role)
+#    - postgres-highlight-root-password     (Postgres "highlight_root" role - used by the portal)
+#    - cvedb-nist-api-key
+#    - portal-admin-password                (initial Highlight admin - must satisfy the Keycloak realm password policy)
+#    - portal-sca-sam-secret
+#    - cvedb-smtp-password                  (OPTIONAL)
+#    - portal-smtp-password                 (OPTIONAL)
+#    - portal-license-key0, portal-license-key5, portal-license-key6, portal-license-key7,
+#      portal-license-key8, portal-license-key9, portal-license-key10, portal-license-key11
+#                                           (OPTIONAL each - values from your Highlight license file)
+#    When Keycloak.enabled=true, also:
+#    - keycloak-db-password                 (Postgres "keycloak" role)
+#    - keycloak-bootstrap-admin-password
+#    - keycloak-permanent-admin-password
+#    - keycloak-admin-client-secret
+#    - keycloak-portal-client-secret
+#    - keycloak-webhook-secret
+#    - keycloak-smtp-password               (OPTIONAL)
+#    Pods read the Secret only when they start: after changing it, restart the workloads
+#    (kubectl rollout restart deployment highlightportal keycloak cvedb, statefulset postgres).
+#    Postgres/Keycloak passwords are applied on first start only - see "Settings that apply only
+#    on first start" in README.md.
+# 2) If existingSecret is left empty, the Helm chart creates a default Secret named
+#    "highlight-pwd-sec" from the values provided in values-secret.yaml.
+
+PostgresImage:
+  name: postgres
+  tag: 17
+  pullPolicy: IfNotPresent
+
+HighlightPortalImage:
+  name: jartero/highlightportal
+  tag: 6.0.1
+  pullPolicy: Always
+
+CvedbImage:
+  name: jartero/cvedb
+  tag: 6.0.1
+  pullPolicy: Always
+
+InitUtilImage:
+  name: castimaging/init-util
+  tag: 1.2.11
+  pullPolicy: IfNotPresent
+
+KeycloakImage:
+  name: jartero/hlkeycloak
+  tag: 1.0.6
+  pullPolicy: IfNotPresent
+  appPort: 8080
+
+Keycloak:
+  enabled: true
+  # GID kubelet chowns the keycloak-data PVC to (see templates/keycloak-deployment.yaml) so the
+  # non-root Keycloak process can write to it. Must be non-zero for environments whose security
+  # policy forbids fsGroup/runAsGroup 0 (e.g. restricted Pod Security Standards).
+  fsGroup: 1000   # ignored when openshift.enabled=true
+  # Non-root UID the container runs as in RestrictedSecurityMode (the Keycloak image's own user).
+  runAsUser: 1000
+  # NOTE: realmName must stay "hl-portal", NOT "highlight". The hlkeycloak entrypoint.sh (1.0.3-1.0.6) hardcodes
+  # the realm-import output filename as hl-portal-realm.json regardless of REALM_NAME, and Keycloak
+  # requires the import file to be named <realm-name>-realm.json.
+  realmName: hl-portal
+  # Portal endpoint receiving Keycloak events (KeycloakEventsWebService in the 6.0.1 WAR)
+  webhookPath: "/WS2/public/keycloak-events"
+  bootstrapAdmin:
+    user: bootstrap-admin
+  permanentAdmin:
+    user: admin
+    email: user@company.com
+  smtp:
+    host: smtp.company.com
+    port: 587
+    user: shared-mailer@company.com
+    from: shared-mailer@company.com
+    fromDisplayName: "CAST Highlight"
+  database:
+    name: keycloak
+    schema: keycloak
+    user: keycloak
+
+Postgres:
+  # RestrictedSecurityMode only (ignored when openshift.enabled=true): UID/fsGroup of the postgres
+  # image's own "postgres" user - the container runs directly as it instead of starting as root.
+  runAsUser: 999
+  fsGroup: 999
+  superuser:
+    user: postgres
+  highlightUser:
+    user: highlight
+  highlightRootUser:
+    user: highlight_root
+
+Cvedb:
+  # Non-root UID the container runs as in RestrictedSecurityMode (the CVEDB image's own user).
+  runAsUser: 5000
+  administratorMail: user@company.com
+  noreplyMail: shared-mailer@company.com
+  smtp:
+    host: smtp.company.com
+    port: 25
+    username: shared-mailer@company.com
+
+HighlightPortal:
+  # GID kubelet chowns the tmp-highlight PVC to (see templates/highlightportal-deployment.yaml) so
+  # the portal's non-root user (uid/gid 5000) can write /tmp/.hl-envfile. Must be non-zero for
+  # environments whose security policy forbids fsGroup/runAsGroup 0.
+  fsGroup: 5000   # ignored when openshift.enabled=true
+  # Non-root UID the container runs as in RestrictedSecurityMode (the Portal image's own user).
+  runAsUser: 5000
+  smtp:
+    host: smtp.company.com
+    port: 587
+    user: shared-mailer@company.com
+    emailSender: shared-mailer@company.com
+  admin:
+    mail: change.me@castsoftware.com
+
+PostgresResources:
+  requests:
+    cpu: 0.5
+    memory: 8G
+  limits:
+    cpu: 0.5
+    memory: 8G
+HighlightPortalResources:
+  requests:
+    cpu: 0.5
+    memory: 8G
+  limits:
+    cpu: 0.5
+    memory: 16G
+
+CvedbResources:
+  requests:
+    cpu: 0.5
+    memory: 4G
+  limits:
+    cpu: 0.5
+    memory: 6G
+
+InitContainerResources:
+  # Shared by every init container (the wait-for-* readiness checks and, in RestrictedSecurityMode,
+  # copy-keycloak-home). Limits included so policies requiring them on every container (e.g.
+  # Gatekeeper "container-must-have-limits") admit the pods.
+  requests:
+    cpu: 0.1
+    memory: 100M
+  limits:
+    cpu: 1
+    memory: 1G
+
+KeycloakResources:
+  requests:
+    cpu: 0.5
+    memory: 1G
+  limits:
+    cpu: 0.5
+    memory: 1G
+
+storageClass:
+  # Leave name empty to use the cluster's default StorageClass (e.g. AKS "managed-csi",
+  # EKS "gp2"/"gp3", GKE "standard-rwo") - unlike k8s-onprem's "local-path", cloud clusters
+  # generally don't have (and shouldn't need) a hardcoded storage class name here.
+  name: ""
+  postgresSize: 50Gi
+  portalTmpSize: 5Gi
+  # SAML SP config written by KeycloakSamlManagerService to /config in the container (see
+  # hl-docker's Portal Dockerfile) - small, just needs to survive pod recreation.
+  portalConfigSize: 100Mi
+  keycloakSize: 1Gi

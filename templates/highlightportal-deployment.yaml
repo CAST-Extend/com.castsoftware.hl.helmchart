@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    highlight.service: highlightportal
+    version: {{ .Values.HighlightPortalImage.tag| default .Values.version }}
+  name: highlightportal
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.HighlightPortalReplicaCount }}
+  selector:
+    matchLabels:
+      highlight.service: highlightportal
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        highlight.network/highlight-network: "true"
+        highlight.service: highlightportal
+    spec:
+      # The image runs as a dedicated non-root user (uid/gid 5000, see docker-images/.../Portal/
+      # Dockerfile). run.sh writes /tmp/.hl-envfile to export the mounted properties.hl-docker
+      # values before launching Java - with tmp-highlight PVC-backed /tmp mounted root:root by the
+      # StorageClass, that write silently fails ("Permission denied"), every HL_* var (including
+      # SPRING_PROFILE) ends up empty, and the app starts with no active profile - which is why
+      # DatabaseManager (profile-gated) then fails to register. fsGroup chowns the volume to a GID
+      # this user can write to. On OpenShift (openshift.enabled) the SCC assigns both the UID and
+      # the fsGroup instead - see k8s-cloud.podSecurityContext in templates/_helpers.tpl.
+      {{- with include "k8s-cloud.podSecurityContext" (dict "root" . "fsGroup" .Values.HighlightPortal.fsGroup) | trim }}{{ . | nindent 6 }}{{- end }}
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.InitUtilImage.name }}:{{ .Values.InitUtilImage.tag }}"
+          imagePullPolicy: "{{ .Values.InitUtilImage.pullPolicy }}"
+          resources:
+            {{- toYaml .Values.InitContainerResources | nindent 12 }}
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" .) | trim }}{{ . | nindent 10 }}{{- end }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until pg_isready -h postgres.{{ .Release.Namespace }}.svc.cluster.local -p 5432; do
+                echo "Waiting for postgres to be ready..."
+                sleep 2
+              done
+        - name: wait-for-cvedb
+          image: "{{ .Values.InitUtilImage.name }}:{{ .Values.InitUtilImage.tag }}"
+          imagePullPolicy: "{{ .Values.InitUtilImage.pullPolicy }}"
+          resources:
+            {{- toYaml .Values.InitContainerResources | nindent 12 }}
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" .) | trim }}{{ . | nindent 10 }}{{- end }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              # cvedb's pod goes Running as soon as the JVM is up, well before it finishes
+              # importing the ~380k-row NIST CVE dataset - but it does start answering HTTP
+              # requests immediately, so poll that instead of just pod status.
+              until curl -sk -o /dev/null -w '%{http_code}' \
+                  "http://cvedb.{{ .Release.Namespace }}.svc.cluster.local:8082/" \
+                  | grep -q 200; do
+                echo "Waiting for CVEDB to be ready..."
+                sleep 5
+              done
+        - name: wait-for-keycloak
+          image: "{{ .Values.InitUtilImage.name }}:{{ .Values.InitUtilImage.tag }}"
+          imagePullPolicy: "{{ .Values.InitUtilImage.pullPolicy }}"
+          resources:
+            {{- toYaml .Values.InitContainerResources | nindent 12 }}
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" .) | trim }}{{ . | nindent 10 }}{{- end }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              # The portal container starting before Keycloak actually answers requests (not just
+              # its pod being Running) leaves DatabaseManager permanently stuck in
+              # KEYCLOAK_CHECK_CONFIGURATION - every request gets redirected to versionerror.html
+              # for the rest of that container's life, and only a portal restart clears it.
+              # Wait for the same HTTP 200 signal Keycloak's own liveness check uses.
+              until curl -sk -o /dev/null -w '%{http_code}' \
+                  "http://keycloak.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.KeycloakImage.appPort }}/auth/realms/master" \
+                  | grep -q 200; do
+                echo "Waiting for Keycloak to be ready..."
+                sleep 5
+              done
+      containers:
+        - image: "{{ .Values.HighlightPortalImage.name }}:{{ .Values.HighlightPortalImage.tag}}"
+          name: highlightportal
+          imagePullPolicy: "{{ .Values.HighlightPortalImage.pullPolicy }}"
+          {{- with include "k8s-cloud.containerSecurityContext" (dict "root" . "runAsUser" .Values.HighlightPortal.runAsUser) | trim }}{{ . | nindent 10 }}{{- end }}
+          # Passwords, secrets and license keys, from the chart-managed Secret or existingSecret (see
+          # values.yaml) - deliberately kept out of properties.hl-docker, see
+          # templates/highlightportal-configmap.yaml.
+          env:
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_PG_PASSWORD" "key" "postgres-highlight-root-password") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_SMTP_PASSWORD" "key" "portal-smtp-password" "optional" true) | nindent 12 }}
+            # Must satisfy the Keycloak realm's password policy (digits(1), length(14), upperCase(1),
+            # lowerCase(1), specialChars(1)) - seeded as the admin's initial Keycloak credential during
+            # KEYCLOAK_CHECK_CONFIGURATION migration; a weaker value fails admin login (non-blocking otherwise).
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_ADMIN_PWD" "key" "portal-admin-password") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_SCA_SAM_SECRET" "key" "portal-sca-sam-secret") | nindent 12 }}
+            {{- range $n := list "0" "5" "6" "7" "8" "9" "10" "11" }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" $ "name" (printf "HL_LICENCE_%s" $n) "key" (printf "portal-license-key%s" $n) "optional" true) | nindent 12 }}
+            {{- end }}
+            {{- if .Values.Keycloak.enabled }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_KEYCLOAK_ADMIN_CLIENT_SECRET" "key" "keycloak-admin-client-secret") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_KEYCLOAK_PORTAL_CLIENT_SECRET" "key" "keycloak-portal-client-secret") | nindent 12 }}
+            {{- include "k8s-cloud.secretEnv" (dict "root" . "name" "HL_KEYCLOAK_WEBHOOK_SECRET" "key" "keycloak-webhook-secret") | nindent 12 }}
+            {{- end }}
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.HighlightPortalResources | nindent 12 }}
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
+            # SAML SP config (see hl-docker's Portal Dockerfile /config comment) - without a
+            # persistent volume here it's lost on pod recreation, forcing SAML setup to be redone.
+            - mountPath: /config
+              name: portal-config
+            - name: highlightportalconf
+              mountPath: /properties.hl-docker
+              subPath: properties.hl-docker
+{{- if include "k8s-cloud.restricted" . }}
+            # /tmp and /config are already PVCs, /target (created writable for uid 5000 in the Portal
+            # Dockerfile) is the only other writable path - needed both with a read-only root
+            # filesystem (RestrictedSecurityMode) and on OpenShift, whose random UID can't write it.
+            - mountPath: /target
+              name: target
+{{- end }}
+      restartPolicy: Always
+      volumes:
+        - name: tmp
+          persistentVolumeClaim:
+            claimName: tmp-highlight
+        - name: portal-config
+          persistentVolumeClaim:
+            claimName: highlightportal-config
+        - name: highlightportalconf
+          configMap:
+            name: highlightportalconf
+{{- if include "k8s-cloud.restricted" . }}
+        - name: target
+          emptyDir: {}
+{{- end }}
