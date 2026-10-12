@@ -7,8 +7,8 @@ This is the Kubernetes counterpart of `hl-docker/docker-compose` - same images, 
 same `/` -> portal and `/auth` -> Keycloak routing. The Ingress / OpenShift Routes take the place of
 the compose stack's nginx gateway.
 
-- Chart name: `k8s-cloud`, chart version / app version `6.0.1`
-- Images: `jartero/highlightportal:6.0.1`, `jartero/cvedb:6.0.1`, `jartero/hlkeycloak:1.0.6`,
+- Chart name: `k8s-cloud`, chart version / app version `6.0.2`
+- Images: `jartero/highlightportal:6.0.2`, `jartero/cvedb:6.0.2`, `jartero/hlkeycloak:1.0.10`,
   `postgres:17`, `castimaging/init-util:1.2.11`
 
 ## Contents
@@ -78,9 +78,15 @@ Postgres databases, schemas and users are created on first start by the `init-db
 | `route` | OpenShift | Two `Route`s (`highlight-keycloak` on `/auth`, `highlight-portal` on `/`), edge TLS at the router | `https://<gateway.host>` |
 
 Every browser-facing URL in the app config (`HL_ROOT_URL`, Keycloak's `KC_HOSTNAME` and
-`APP_BASE_URL`, `HL_KEYCLOAK_ADMIN_URL`) is derived from `gateway.*` and `networking.*`. You set the
+`APP_BASE_URL`, `HL_KEYCLOAK_PUBLIC_URL`) is derived from `gateway.*` and `networking.*`. You set the
 hostname **once**, in `gateway.host`. The compose stack needs it in several places; the chart does
 not.
+
+Since 6.0.2 the portal uses two Keycloak URLs: `keycloak.public.url` (browser: login, logout,
+token issuer) and `keycloak.internal.url` (the portal pod's own calls: token, userinfo, certs and
+the `/admin/*` API). Both default to `<gateway URL>/auth`. Set `Keycloak.internalUrl` when a front
+such as an F5 blocks `/admin/*` on the public URL, and `Keycloak.publicUrl` to override the derived
+public URL - see the comments in [values.yaml](values.yaml).
 
 ## Layout
 
@@ -489,7 +495,7 @@ With `openshift.enabled=true`:
   escalation, all capabilities dropped).
 - cvedb and the portal get extra `emptyDir` mounts for the paths their image user owns, which the
   random UID can't write.
-- The images must run under an arbitrary UID with supplemental group 0. The `6.0.1` images built
+- The images must run under an arbitrary UID with supplemental group 0. The `6.0.2` images built
   from `hl-docker` meet this: their writable paths are owned by group 0 with `g=u` permissions.
 
 ### Step 1 - Log in and create the project
@@ -629,7 +635,8 @@ kubectl rollout restart deployment cvedb highlightportal keycloak -n $NS
 
 1. `helm upgrade` with the new `gateway.host`. In ingress mode, also update the DNS record and the
    TLS secret. On OpenShift, pass the new certificate. This updates `HL_ROOT_URL`,
-   `HL_KEYCLOAK_ADMIN_URL`, `KC_HOSTNAME` and `APP_BASE_URL`.
+   `HL_KEYCLOAK_PUBLIC_URL`/`HL_KEYCLOAK_INTERNAL_URL` (unless `Keycloak.publicUrl`/`internalUrl`
+   are set - update those too), `KC_HOSTNAME` and `APP_BASE_URL`.
 2. The realm was imported with the old URL. In the Keycloak admin console (realm `hl-portal`, client
    `highlight-portal`), update **Valid redirect URIs**, **Web origins** and the root/home URLs to
    the new host. Otherwise logins fail with `Invalid parameter: redirect_uri`.

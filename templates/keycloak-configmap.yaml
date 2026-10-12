@@ -32,7 +32,7 @@ data:
   # to this pod. KC_PROXY_HEADERS makes Keycloak trust the ingress's X-Forwarded-Proto header so it
   # reports "https" in its own issuer/redirect URLs when gateway.protocol=https - without it,
   # Keycloak would embed "http://" in tokens/URLs even though the actual gateway.host is https,
-  # which fails the portal's OIDC issuer validation (spring.security...issuer-uri, built from
+  # which fails the portal's OIDC issuer validation (keycloak.public.url, built from
   # gateway.protocol).
   # networking.type=nodeport: no proxy in front of Keycloak, so KC_PROXY_HEADERS is left unset -
   # trusting X-Forwarded-* headers with nothing there to set them would let a client spoof them.

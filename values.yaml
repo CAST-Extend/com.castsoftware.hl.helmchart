@@ -6,7 +6,7 @@
 # Unlike k8s-onprem, no Service in this chart ever uses NodePort. The only thing exposed outside
 # the cluster is the single gateway configured below.
 
-version: 6.0.1
+version: 6.0.2
 
 PostgresReplicaCount: 1
 HighlightPortalReplicaCount: 1
@@ -16,7 +16,7 @@ KeycloakReplicaCount: 1
 #
 # The externally-reachable hostname/IP. In networking.type=ingress this, together with
 # gateway.protocol/port, is the single entry point every browser-facing URL baked into the app
-# config (HL_ROOT_URL, the Keycloak issuer/APP_BASE_URL, HL_KEYCLOAK_ADMIN_URL) is derived from -
+# config (HL_ROOT_URL, the Keycloak issuer/APP_BASE_URL, HL_KEYCLOAK_PUBLIC_URL) is derived from -
 # point it at the DNS record that resolves to the Ingress controller's address.
 #
 # In networking.type=nodeport there is no single gateway (Portal and Keycloak each get their own
@@ -151,12 +151,12 @@ PostgresImage:
 
 HighlightPortalImage:
   name: jartero/highlightportal
-  tag: 6.0.1
+  tag: 6.0.2
   pullPolicy: Always
 
 CvedbImage:
   name: jartero/cvedb
-  tag: 6.0.1
+  tag: 6.0.2
   pullPolicy: Always
 
 InitUtilImage:
@@ -166,7 +166,7 @@ InitUtilImage:
 
 KeycloakImage:
   name: jartero/hlkeycloak
-  tag: 1.0.6
+  tag: 1.0.10
   pullPolicy: IfNotPresent
   appPort: 8080
 
@@ -182,7 +182,21 @@ Keycloak:
   # the realm-import output filename as hl-portal-realm.json regardless of REALM_NAME, and Keycloak
   # requires the import file to be named <realm-name>-realm.json.
   realmName: hl-portal
-  # Portal endpoint receiving Keycloak events (KeycloakEventsWebService in the 6.0.1 WAR)
+  # Keycloak base URLs given to the portal (both include the /auth path, no trailing slash) - since
+  # the 6.0.2 WAR, keycloak.public.url and keycloak.internal.url replace the single
+  # HL_KEYCLOAK_ADMIN_URL of 6.0.1.
+  # publicUrl: what the browser reaches (login redirect, logout) and the issuer expected in tokens.
+  #   Leave empty to derive it from gateway.*/networking.* (<gateway URL>/auth).
+  publicUrl: ""
+  # internalUrl: used by the portal pod for its server-to-server calls (token, userinfo, certs and
+  #   the /admin/* API). Set it when a front such as an F5 blocks /admin/* on the public URL, e.g.
+  #   http://keycloak.<namespace>.svc.cluster.local:8080/auth. Leave empty to reuse publicUrl (the
+  #   portal then just logs a warning that both URLs are identical).
+  #   Only point it somewhere else if Keycloak issues tokens with the public issuer whatever URL it
+  #   is called on: with this chart's KC_HOSTNAME (bare gateway.host), a direct in-cluster call gets
+  #   tokens with an http://<host>:8080 issuer and the portal rejects the login.
+  internalUrl: ""
+  # Portal endpoint receiving Keycloak events (KeycloakEventsWebService in the 6.0.2 WAR)
   webhookPath: "/WS2/public/keycloak-events"
   bootstrapAdmin:
     user: bootstrap-admin

@@ -51,7 +51,9 @@ spec:
           livenessProbe:
             exec:
               command:
-                - pg_isready -U {{ .Values.Postgres.superuser.user }}
+                - pg_isready
+                - -U
+                - {{ .Values.Postgres.superuser.user | quote }}
             failureThreshold: 5
             periodSeconds: 10
             timeoutSeconds: 5

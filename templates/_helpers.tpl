@@ -55,6 +55,31 @@ stay on the in-cluster Service DNS name (see KC_SPI_EVENTS_LISTENER_HL_EVENT_WEB
 {{- end -}}
 
 {{/*
+Keycloak URLs handed to the portal (6.0.2+ WAR: keycloak.public.url / keycloak.internal.url), /auth
+included, trailing slash stripped.
+
+- keycloakPublicURL: browser-facing (login redirect, logout, token issuer) - Keycloak.publicUrl, or
+  derived from k8s-cloud.keycloakBaseURL.
+- keycloakInternalURL: the portal pod's own server-to-server calls (token, userinfo, certs, /admin/*
+  API) - Keycloak.internalUrl, or the public URL.
+*/}}
+{{- define "k8s-cloud.keycloakPublicURL" -}}
+{{- if .Values.Keycloak.publicUrl -}}
+{{- trimSuffix "/" .Values.Keycloak.publicUrl -}}
+{{- else -}}
+{{- printf "%s/auth" (include "k8s-cloud.keycloakBaseURL" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "k8s-cloud.keycloakInternalURL" -}}
+{{- if .Values.Keycloak.internalUrl -}}
+{{- trimSuffix "/" .Values.Keycloak.internalUrl -}}
+{{- else -}}
+{{- include "k8s-cloud.keycloakPublicURL" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 True (non-empty) when containers must comply with the "restricted" Pod Security Standard - either
 explicitly (RestrictedSecurityMode) or because OpenShift's restricted-v2 SCC enforces it anyway.
 */}}

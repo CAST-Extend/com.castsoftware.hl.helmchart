@@ -52,7 +52,11 @@ data:
      # Service hostname (which has no route to Keycloak from a browser at all).
      # networking.type=nodeport: Keycloak has its own NodePort (see templates/keycloak-service.yaml),
      # a different host:port than the portal's own.
-     HL_KEYCLOAK_ADMIN_URL={{ include "k8s-cloud.keycloakBaseURL" . }}/auth
+     # Since 6.0.2 the WAR splits this into a browser-facing URL (keycloak.public.url) and the URL
+     # the portal pod itself calls (keycloak.internal.url) - see Keycloak.publicUrl/internalUrl in
+     # values.yaml. Both default to the URL described above.
+     HL_KEYCLOAK_PUBLIC_URL={{ include "k8s-cloud.keycloakPublicURL" . }}
+     HL_KEYCLOAK_INTERNAL_URL={{ include "k8s-cloud.keycloakInternalURL" . }}
      HL_KEYCLOAK_REALM={{ .Values.Keycloak.realmName }}
      HL_KEYCLOAK_ADMIN_CLIENT_ID=highlight-admin
      HL_KEYCLOAK_DISABLE_SSL_VALIDATION=false

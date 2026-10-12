@@ -1,0 +1,16 @@
+# Normalize line endings: store LF in the repo, check out LF everywhere
+* text=auto eol=lf
+
+# Windows batch scripts need CRLF for cmd.exe
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.jar binary
+*.war binary
+*.pfx binary
+*.p12 binary
+*.zip binary
+*.gz  binary
+*.png binary
+*.jpg binary
