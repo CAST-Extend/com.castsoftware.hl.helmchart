@@ -4,10 +4,17 @@ kind: Ingress
 metadata:
   name: highlight-gateway
   namespace: {{ .Release.Namespace }}
-{{- if .Values.networking.ingress.annotations }}
+  # ingress-nginx defaults to a 1m request body limit, which rejects HighlightAutomation result
+  # uploads (and source archives) with "413 Request Entity Too Large". These defaults mirror the
+  # compose gateway (client_max_body_size / proxy_*_timeout); any key set in
+  # networking.ingress.annotations overrides them.
+  {{- $defaults := dict
+        "nginx.ingress.kubernetes.io/proxy-body-size" (toString .Values.networking.ingress.proxyBodySize)
+        "nginx.ingress.kubernetes.io/proxy-connect-timeout" "300"
+        "nginx.ingress.kubernetes.io/proxy-send-timeout" "300"
+        "nginx.ingress.kubernetes.io/proxy-read-timeout" "300" }}
   annotations:
-    {{- toYaml .Values.networking.ingress.annotations | nindent 4 }}
-{{- end }}
+    {{- toYaml (merge (deepCopy (.Values.networking.ingress.annotations | default dict)) $defaults) | nindent 4 }}
 spec:
   ingressClassName: {{ .Values.networking.ingress.className }}
 {{- if .Values.networking.ingress.tls.enabled }}

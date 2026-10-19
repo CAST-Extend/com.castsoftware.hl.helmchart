@@ -61,6 +61,9 @@ networking:
   type: ingress   # ingress (default, https), nodeport (http, no ingress controller needed) or route (OpenShift)
   ingress:
     className: nginx
+    # Max upload size through the ingress (nginx.ingress.kubernetes.io/proxy-body-size). ingress-nginx
+    # defaults to 1m, which makes HighlightAutomation result uploads fail with 413. "0" = unlimited.
+    proxyBodySize: 2048m
     annotations: {}
     # e.g. cert-manager.io/cluster-issuer: letsencrypt-prod
     tls:

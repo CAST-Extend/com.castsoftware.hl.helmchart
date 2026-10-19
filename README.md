@@ -721,6 +721,7 @@ explanations.
 | `gateway.port` | `""` | Non-standard external port, if any (ingress and route only) |
 | `networking.type` | `ingress` | `ingress`, `nodeport` or `route` |
 | `networking.ingress.className` | `nginx` | IngressClass |
+| `networking.ingress.proxyBodySize` | `2048m` | Max request body through the ingress (`nginx.ingress.kubernetes.io/proxy-body-size`); ingress-nginx defaults to 1m, causing 413 on result uploads. `0` = unlimited |
 | `networking.ingress.annotations` | `{}` | Extra Ingress annotations (cert-manager, proxy sizes, and so on) |
 | `networking.ingress.tls.enabled` / `.secretName` | `true` / `tls-secret-cast` | TLS on the Ingress, with an existing secret |
 | `networking.nodeport.portalPort` / `.keycloakPort` | `30080` / `30081` | NodePorts |
