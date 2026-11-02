@@ -84,9 +84,12 @@ not.
 
 Since 6.0.2 the portal uses two Keycloak URLs: `keycloak.public.url` (browser: login, logout,
 token issuer) and `keycloak.internal.url` (the portal pod's own calls: token, userinfo, certs and
-the `/admin/*` API). Both default to `<gateway URL>/auth`. Set `Keycloak.internalUrl` when a front
-such as an F5 blocks `/admin/*` on the public URL, and `Keycloak.publicUrl` to override the derived
-public URL - see the comments in [values.yaml](values.yaml).
+the `/admin/*` API). The public URL defaults to `<gateway URL>/auth`, and the internal URL to the
+in-cluster Keycloak Service (`http://keycloak.<namespace>.svc.cluster.local:8080/auth`), so the
+portal's admin calls never go through the ingress or a front such as an F5 that blocks `/admin/*`.
+This relies on Keycloak's `KC_HOSTNAME` being the full public URL, which pins the token issuer
+whatever URL Keycloak is called on. Override them with `Keycloak.publicUrl`/`Keycloak.internalUrl` -
+see the comments in [values.yaml](values.yaml).
 
 ## Layout
 
@@ -601,7 +604,9 @@ Re-run the same `helm upgrade --install` command with the same values files. Dep
 pods sharing a ReadWriteOnce volume. The portal and cvedb images use `pullPolicy: Always`, so a
 restart also picks up a new build of the same tag.
 
-A ConfigMap or Secret change doesn't restart pods by itself. After an upgrade that only changes values:
+The highlightportal, keycloak and cvedb pods carry a `checksum/config` annotation of their ConfigMap,
+so `helm upgrade` rolls them automatically when their config changes. Secret changes and Postgres
+config changes don't restart anything by themselves. After an upgrade that only changes those:
 
 ```bash
 kubectl rollout restart deployment highlightportal keycloak cvedb -n highlight
@@ -635,8 +640,8 @@ kubectl rollout restart deployment cvedb highlightportal keycloak -n $NS
 
 1. `helm upgrade` with the new `gateway.host`. In ingress mode, also update the DNS record and the
    TLS secret. On OpenShift, pass the new certificate. This updates `HL_ROOT_URL`,
-   `HL_KEYCLOAK_PUBLIC_URL`/`HL_KEYCLOAK_INTERNAL_URL` (unless `Keycloak.publicUrl`/`internalUrl`
-   are set - update those too), `KC_HOSTNAME` and `APP_BASE_URL`.
+   `HL_KEYCLOAK_PUBLIC_URL` and `KC_HOSTNAME` (unless `Keycloak.publicUrl` is set - update it too)
+   and `APP_BASE_URL`. `HL_KEYCLOAK_INTERNAL_URL` is the in-cluster Service and doesn't change.
 2. The realm was imported with the old URL. In the Keycloak admin console (realm `hl-portal`, client
    `highlight-portal`), update **Valid redirect URIs**, **Web origins** and the root/home URLs to
    the new host. Otherwise logins fail with `Invalid parameter: redirect_uri`.

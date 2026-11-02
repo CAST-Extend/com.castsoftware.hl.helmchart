@@ -15,6 +15,9 @@ spec:
     type: Recreate
   template:
     metadata:
+      annotations:
+        # Rolls the pod on helm upgrade when cvedbconf changes - only read at startup.
+        checksum/config: {{ include (print $.Template.BasePath "/cvedb-configmap.yaml") . | sha256sum }}
       labels:
         highlight.network/highlight-network: "true"
         highlight.service: cvedb

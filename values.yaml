@@ -164,7 +164,7 @@ CvedbImage:
 
 InitUtilImage:
   name: castimaging/init-util
-  tag: 1.2.11
+  tag: 1.2.12
   pullPolicy: IfNotPresent
 
 KeycloakImage:
@@ -192,12 +192,10 @@ Keycloak:
   #   Leave empty to derive it from gateway.*/networking.* (<gateway URL>/auth).
   publicUrl: ""
   # internalUrl: used by the portal pod for its server-to-server calls (token, userinfo, certs and
-  #   the /admin/* API). Set it when a front such as an F5 blocks /admin/* on the public URL, e.g.
-  #   http://keycloak.<namespace>.svc.cluster.local:8080/auth. Leave empty to reuse publicUrl (the
-  #   portal then just logs a warning that both URLs are identical).
-  #   Only point it somewhere else if Keycloak issues tokens with the public issuer whatever URL it
-  #   is called on: with this chart's KC_HOSTNAME (bare gateway.host), a direct in-cluster call gets
-  #   tokens with an http://<host>:8080 issuer and the portal rejects the login.
+  #   the /admin/* API). Leave empty to use the in-cluster Keycloak Service
+  #   (http://keycloak.<namespace>.svc.cluster.local:<appPort>/auth), which bypasses the ingress and
+  #   any front such as an F5 that blocks /admin/*. This works because KC_HOSTNAME is the full
+  #   public URL, so tokens carry the public issuer whatever URL Keycloak is called on.
   internalUrl: ""
   # Portal endpoint receiving Keycloak events (KeycloakEventsWebService in the 6.0.8 WAR)
   webhookPath: "/WS2/public/keycloak-events"

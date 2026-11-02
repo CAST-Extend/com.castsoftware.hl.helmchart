@@ -20,7 +20,13 @@ data:
 
   # Hostname / routing - reachable from the user's browser through the gateway's /auth path
   # (see templates/ingress.yaml, which routes it under the same host as the portal).
-  KC_HOSTNAME: "{{ .Values.gateway.host }}"
+  # KC_HOSTNAME is the full public URL (scheme + host + port + /auth), not a bare host: the token
+  # issuer is then fixed whatever URL Keycloak is called on, so the portal's server-to-server calls
+  # can go straight to the in-cluster Service (Keycloak.internalUrl) and still get tokens whose
+  # issuer matches keycloak.public.url. KC_HOSTNAME_BACKCHANNEL_DYNAMIC lets those calls see
+  # backchannel endpoints (token, userinfo, certs) on the URL they came in on instead of the public one.
+  KC_HOSTNAME: "{{ include "k8s-cloud.keycloakPublicURL" . }}"
+  KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
   KC_HTTP_RELATIVE_PATH: "/auth"
   KC_APP_PORT: "{{ .Values.KeycloakImage.appPort }}"
   # Used by post-init.sh for its own local admin-API calls (curl with a Host header override) -

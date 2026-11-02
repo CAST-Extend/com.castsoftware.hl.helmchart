@@ -37,9 +37,10 @@ Base URL of the Portal as reached from a browser or from Keycloak's own redirect
 {{- end -}}
 
 {{/*
-Base URL of Keycloak as reached from a browser (login redirects) and from the Portal pod itself
-(admin API calls, health checks) - i.e. everything but Keycloak's own internal SPI callbacks, which
-stay on the in-cluster Service DNS name (see KC_SPI_EVENTS_LISTENER_HL_EVENT_WEBHOOK_URL in templates/keycloak-configmap.yaml).
+Base URL of Keycloak as reached from a browser (login redirects, logout, token issuer). The Portal
+pod's own server-to-server calls and Keycloak's SPI callbacks stay on the in-cluster Service DNS
+name instead (see k8s-cloud.keycloakInternalURL below and KC_SPI_EVENTS_LISTENER_HL_EVENT_WEBHOOK_URL
+in templates/keycloak-configmap.yaml).
 
 - networking.type=ingress: same gateway host/port as the Portal, routed to Keycloak under /auth by
   the shared Ingress (see templates/ingress.yaml) - identical to k8s-cloud.gatewayBaseURL.
@@ -61,7 +62,9 @@ included, trailing slash stripped.
 - keycloakPublicURL: browser-facing (login redirect, logout, token issuer) - Keycloak.publicUrl, or
   derived from k8s-cloud.keycloakBaseURL.
 - keycloakInternalURL: the portal pod's own server-to-server calls (token, userinfo, certs, /admin/*
-  API) - Keycloak.internalUrl, or the public URL.
+  API) - Keycloak.internalUrl, or the in-cluster Keycloak Service (bypasses the ingress / any F5
+  front, safe because KC_HOSTNAME pins the token issuer to the public URL), or the public URL when
+  this chart doesn't deploy Keycloak.
 */}}
 {{- define "k8s-cloud.keycloakPublicURL" -}}
 {{- if .Values.Keycloak.publicUrl -}}
@@ -74,6 +77,8 @@ included, trailing slash stripped.
 {{- define "k8s-cloud.keycloakInternalURL" -}}
 {{- if .Values.Keycloak.internalUrl -}}
 {{- trimSuffix "/" .Values.Keycloak.internalUrl -}}
+{{- else if .Values.Keycloak.enabled -}}
+{{- printf "http://keycloak.%s.svc.cluster.local:%v/auth" .Release.Namespace .Values.KeycloakImage.appPort -}}
 {{- else -}}
 {{- include "k8s-cloud.keycloakPublicURL" . -}}
 {{- end -}}
