@@ -7,8 +7,8 @@ This is the Kubernetes counterpart of `hl-docker/docker-compose` - same images, 
 same `/` -> portal and `/auth` -> Keycloak routing. The Ingress / OpenShift Routes take the place of
 the compose stack's nginx gateway.
 
-- Chart name: `k8s-cloud`, chart version / app version `6.0.2`
-- Images: `jartero/highlightportal:6.0.2`, `jartero/cvedb:6.0.2`, `jartero/hlkeycloak:1.0.10`,
+- Chart name: `k8s-cloud`, chart version / app version `6.0.8`
+- Images: `jartero/highlightportal:6.0.8`, `jartero/cvedb:6.0.8`, `jartero/hlkeycloak:1.0.10`,
   `postgres:17`, `castimaging/init-util:1.2.11`
 
 ## Contents
@@ -495,7 +495,7 @@ With `openshift.enabled=true`:
   escalation, all capabilities dropped).
 - cvedb and the portal get extra `emptyDir` mounts for the paths their image user owns, which the
   random UID can't write.
-- The images must run under an arbitrary UID with supplemental group 0. The `6.0.2` images built
+- The images must run under an arbitrary UID with supplemental group 0. The `6.0.8` images built
   from `hl-docker` meet this: their writable paths are owned by group 0 with `g=u` permissions.
 
 ### Step 1 - Log in and create the project
