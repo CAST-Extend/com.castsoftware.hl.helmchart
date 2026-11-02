@@ -8,7 +8,7 @@ same `/` -> portal and `/auth` -> Keycloak routing. The Ingress / OpenShift Rout
 the compose stack's nginx gateway.
 
 - Chart name: `k8s-cloud`, chart version / app version `6.0.8`
-- Images: `jartero/highlightportal:6.0.8`, `jartero/cvedb:6.0.8`, `jartero/hlkeycloak:1.0.10`,
+- Images: `jartero/highlightportal:6.0.8`, `jartero/cvedb:6.0.8`, `jartero/hlkeycloak:1.0.11`,
   `postgres:17`, `castimaging/init-util:1.2.11`
 
 ## Contents
